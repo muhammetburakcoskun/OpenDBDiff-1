@@ -8,6 +8,8 @@ using OpenDBDiff.Abstractions.Schema.Model;
 using OpenDBDiff.Abstractions.Ui;
 using OpenDBDiff.Extensions;
 using OpenDBDiff.Settings;
+using OpenDBDiff.SqlServer.Schema.Model;
+using OpenDBDiff.SqlServer.Ui;
 using ScintillaNET;
 using System;
 using System.Collections.Generic;
@@ -18,7 +20,6 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Windows.Forms;
-
 namespace OpenDBDiff.UI
 {
     public partial class MainForm : Form
@@ -36,7 +37,7 @@ namespace OpenDBDiff.UI
         {
             InitializeComponent();
 
-            this.Text = string.Concat(nameof(OpenDBDiff), " v", Assembly.GetExecutingAssembly().GetName().Version.ToString());
+            this.Text = string.Concat(nameof(OpenDBDiff), " v", System.Reflection.Assembly.GetExecutingAssembly().GetName().Version.ToString());
         }
 
         private void StartComparison()
@@ -248,6 +249,10 @@ namespace OpenDBDiff.UI
                 Cursor = Cursors.WaitCursor;
                 _selectedSchemas = schemaTreeView1.GetCheckedSchemas();
                 StartComparison();
+                FillDiffComboBox();
+                ShowTreeViewNodesDetailed();
+
+
                 schemaTreeView1.SetCheckedSchemas(_selectedSchemas);
                 errorLocation = "Saving Connections";
                 Project.SaveLastConfiguration(LeftDatabaseSelector.ConnectionString, RightDatabaseSelector.ConnectionString);
@@ -682,5 +687,351 @@ namespace OpenDBDiff.UI
             RightDatabaseSelector.SetSettingsFrom(LeftDatabaseSelector);
             LeftDatabaseSelector.SetSettingsFrom(temp);
         }
+        
+        private void btnScriptObject_Click(object sender, EventArgs e)
+        {
+            StringBuilder scriptBuilder = new StringBuilder();
+
+            for (int i = 0; i < txtDiff.Lines.Count; i++)
+            {
+                string lineText = txtDiff.Lines[i].Text.TrimEnd('\r', '\n');
+
+                if (lineText.StartsWith("+ ") || lineText.StartsWith("- ") || lineText.StartsWith("* "))
+                {
+                    scriptBuilder.AppendLine(lineText.Substring(2)); // Baþýndaki iþareti çýkar, sadece SQL komutunu al
+                }
+            }
+
+            // Dosyaya yaz
+            string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            string scriptPath = $@"C:\Temp\selected_diff_script_{timestamp}.sql";
+            try
+            {
+                File.WriteAllText(scriptPath, scriptBuilder.ToString());
+                MessageBox.Show("Seçilen farklar script dosyasýna yazýldý:\n" + scriptPath);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Dosya yazýlamadý: " + ex.Message);
+            }
+
+            // 2. SQL Server bilgilerini al
+            var handler = this.ProjectSelectorHandler as SQLServerProjectHandler;
+            if (handler == null)
+            {
+                MessageBox.Show("SQL Server handler bulunamadý.");
+                return;
+            }
+
+            // Dinamik olarak Destination bilgilerini al
+            string destinationServer = handler.DestinationControl.ServerName;
+            string destinationDatabase = handler.DestinationControl.DatabaseName;
+            string destinationUserName = handler.DestinationControl.UserName;
+            string destinationPassword = handler.DestinationControl.Password;
+            bool useWindowsAuthenticationDestination = handler.DestinationControl.UseWindowsAuthentication;
+
+            // SSMS baþlatmak için bilgileri kullan
+            string ssmsPath = @"C:\Program Files (x86)\Microsoft SQL Server Management Studio 20\Common7\IDE\Ssms.exe";
+
+            // Destination için authentication
+            string destinationArguments = $"-S {destinationServer} -d {destinationDatabase} -U {destinationUserName} -P {destinationPassword} -i \"{scriptPath}\" -nosplash";
+            // SSMS'i baþlat
+            try
+            {
+                Process.Start(ssmsPath , scriptPath);
+                MessageBox.Show(destinationArguments);// sadece destination veritabaný için SSMS'i baþlat
+            }
+            
+            catch (Exception ex)
+            {
+                MessageBox.Show("SSMS baþlatýlamadý: " + ex.Message);
+            }
+        }
+        private void GetSchemasFromTree(TreeNodeCollection nodes, List<ISchemaBase> result)
+        {
+            foreach (TreeNode node in nodes)
+
+            {
+                MessageBox.Show($"Node Text: {node.Text}, Tag: {node.Tag}");
+                if (node.Tag is ISchemaBase schemaBase)
+                {
+                    if (schemaBase.Status == ObjectStatus.Create || schemaBase.Status == ObjectStatus.Drop)
+                    {
+                        result.Add(schemaBase);
+                        
+                    }
+                }
+
+                if (node.Nodes.Count > 0)
+                {
+                    GetSchemasFromTree(node.Nodes, result);
+                }
+            }
+            
+        }
+        private void ShowTreeViewNodesDetailed()
+        {
+            string allNodes = "";
+
+            foreach (TreeNode parentNode in schemaTreeView1.Nodes)
+            {
+                allNodes += $"Baþlýk: {parentNode.Text} (Tag: {(parentNode.Tag != null ? parentNode.Tag.GetType().Name : "null")})\n";
+
+                foreach (TreeNode childNode in parentNode.Nodes)
+                {
+                    allNodes += $"    Alt: {childNode.Text} (Tag: {(childNode.Tag != null ? childNode.Tag.GetType().Name : "null")})\n";
+                }
+            }
+
+            if (string.IsNullOrEmpty(allNodes))
+            {
+                MessageBox.Show("TreeView þu anda boþ!", "Bilgi", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            else
+            {
+                MessageBox.Show(allNodes, "TreeView Detaylý Ýçeriði", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+        }
+
+        private void FillDiffComboBox()
+        {
+            DiffcomboBox.Items.Clear(); // ComboBox'ý temizliyoruz
+
+            foreach (TreeNode parentNode in schemaTreeView1.Nodes) // Örn: Database adý
+            {
+                foreach (TreeNode categoryNode in parentNode.Nodes) // Örn: Tables, Views, Procedures
+                {
+                    bool hasDifference = false;
+
+                    foreach (TreeNode itemNode in categoryNode.Nodes) // Örn: Customers, Orders
+                    {
+                        if (itemNode.Tag is ISchemaBase schemaBase)
+                        {
+                            if (schemaBase.Status != ObjectStatus.Original)
+                            {
+                                hasDifference = true;
+                                break; // Bu kategori içinde fark bulundu, devam etmeye gerek yok
+                            }
+                        }
+                    }
+
+                    if (hasDifference)
+                    {
+                        // Ayný kategori daha önce eklendiyse tekrar ekleme
+                        if (!DiffcomboBox.Items.Contains(categoryNode.Text))
+                            DiffcomboBox.Items.Add(categoryNode.Text);
+                    }
+                }
+            }
+
+            MessageBox.Show($"ComboBox'a eklenen kategori sayýsý: {DiffcomboBox.Items.Count}");
+
+            if (DiffcomboBox.Items.Count > 0)
+            {
+                DiffcomboBox.SelectedIndex = 0;
+                generateSqlButton.Enabled = true;
+            }
+            else
+            {
+                generateSqlButton.Enabled = false;
+            }
+        }
+
+
+
+        private void DiffcomboBox_SelectedIndexChanged_1(object sender, EventArgs e)
+        {
+            generateSqlButton.Enabled = true;
+        }
+        private void generateSqlButton_Click(object sender, EventArgs e)
+        {
+            // ComboBox'tan seçilen baþlýðý al
+            var selectedTitle = DiffcomboBox.SelectedItem?.ToString();
+            if (string.IsNullOrEmpty(selectedTitle))
+            {
+                MessageBox.Show("Lütfen bir baþlýk seçiniz.");
+                return;
+            }
+
+            // SQL scriptlerini tutacak liste
+            List<string> sqlScripts = new List<string>();
+
+            // TreeView'deki her bir parentNode'u dolaþ
+            foreach (TreeNode parentNode in schemaTreeView1.Nodes)
+            {
+                foreach (TreeNode categoryNode in parentNode.Nodes)
+                {
+                    // Seçilen baþlýkla eþleþiyorsa iþle
+                    if (categoryNode.Text == selectedTitle)
+                    {
+                        foreach (TreeNode itemNode in categoryNode.Nodes)
+                        {
+                            if (itemNode.Tag is ISchemaBase schemaItem)
+                            {
+                                var sql = schemaItem.ToSql();
+
+                                if (!string.IsNullOrWhiteSpace(sql))
+                                {
+                                    sqlScripts.Add(sql);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Hiç SQL bulunmadýysa kullanýcýya bildir
+            if (sqlScripts.Count == 0)
+            {
+                MessageBox.Show("Seçilen baþlýk için SQL scripti bulunamadý.");
+                return;
+            }
+
+            // SQL scriptlerini dosyaya yaz
+            string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            string filePath = $@"C:\file\generated_{timestamp}.sql";
+            try
+            {
+                System.IO.File.WriteAllLines(filePath, sqlScripts);
+                MessageBox.Show("SQL scriptleri baþarýyla dosyaya yazýldý:\n" + filePath);
+                System.Diagnostics.Process.Start(@"C:\Program Files (x86)\Microsoft SQL Server Management Studio 20\Common7\IDE\Ssms.exe", $"\"{filePath}\"");         
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("SQL scriptleri yazýlýrken hata oluþtu:\n" + ex.Message);
+            }
+            
+
+        }
+
+
+
+        private void WriteAllSqlToFile()
+        {
+            // SQL scriptlerini tutacak liste
+            List<string> allSqlScripts = new List<string>();
+
+            // TreeView'deki her bir parentNode'u dolaþ
+            foreach (TreeNode parentNode in schemaTreeView1.Nodes)
+            {
+                foreach (TreeNode categoryNode in parentNode.Nodes)
+                {
+                    foreach (TreeNode itemNode in categoryNode.Nodes)
+                    {
+                        if (itemNode.Tag is ISchemaBase schemaItem)
+                        {
+                            // Tüm SQL ifadelerini ekle
+                            var sql = schemaItem.ToSql();
+                            if (!string.IsNullOrWhiteSpace(sql))
+                            {
+                                allSqlScripts.Add(sql);
+                            }
+
+                            // Fark varsa, farklarý da ekle
+                            if (schemaItem.Status != ObjectStatus.Original)
+                            {
+                                var diffScripts = schemaItem.ToSqlDiff(null);
+                                foreach (var script in diffScripts)
+                                {
+                                    if (script is SQLScript diffScript && !string.IsNullOrWhiteSpace(diffScript.SQL))
+                                    {
+                                        allSqlScripts.Add(diffScript.SQL);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // SQL scriptlerini dosyaya yaz
+            string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            string filePath = $@"C:\file\output_{timestamp}.sql";
+            try
+            {
+                System.IO.File.WriteAllLines(filePath, allSqlScripts);
+                MessageBox.Show("SQL ve farklar baþarýyla dosyaya yazýldý:\n" + filePath);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("SQL scriptleri yazýlýrken hata oluþtu:\n" + ex.Message);
+            }
+        }
+
+        //private void generateSqlButton_Click(object sender, EventArgs e)
+        //{
+        //    // ComboBox'tan seçilen baþlýðý al
+        //    var selectedTitle = DiffcomboBox.SelectedItem?.ToString();
+        //    if (string.IsNullOrEmpty(selectedTitle))
+        //    {
+        //        MessageBox.Show("Lütfen bir baþlýk seçiniz.");
+        //        return;
+        //    }
+
+        //    // SQL scriptlerini tutacak liste
+        //    List<string> diffScripts = new List<string>();
+
+        //    // TreeView'deki her bir parentNode'u dolaþ
+        //    foreach (TreeNode parentNode in schemaTreeView1.Nodes)
+        //    {
+        //        foreach (TreeNode categoryNode in parentNode.Nodes)
+        //        {
+        //            // Seçilen baþlýkla eþleþiyorsa iþle
+        //            if (categoryNode.Text == selectedTitle)
+        //            {
+        //                MessageBox.Show("eþleþti");
+
+        //                foreach (TreeNode itemNode in categoryNode.Nodes)
+        //                {
+        //                    if (itemNode.Tag is ISchemaBase schemaItem)
+        //                    {
+        //                        // Sadece fark varsa iþleme al
+        //                        if (schemaItem.Status != ObjectStatus.Original)
+        //                        {
+        //                            var scriptList = schemaItem.ToSqlDiff(null);
+
+        //                            // scriptList varsa ve boþ deðilse
+        //                            if (scriptList != null && scriptList.Count > 0)
+        //                            {
+        //                                foreach (var scriptObj in scriptList)
+        //                                {
+        //                                    if (scriptObj is SQLScript script && !string.IsNullOrWhiteSpace(script.SQL))
+        //                                    {
+        //                                        diffScripts.Add(script.SQL);
+        //                                    }
+        //                                }
+        //                            }
+        //                        }
+        //                    }
+        //                }
+        //            }
+        //        }
+        //    }
+
+        //    // Hiç fark bulunmadýysa kullanýcýya bildir
+        //    if (diffScripts.Count == 0)
+        //    {
+        //        MessageBox.Show("Seçilen baþlýk için fark bulunamadý.");
+        //        return;
+        //    }
+
+        //    // SQL scriptlerini dosyaya yaz
+        //    string filePath = @"C:\file\file.txt";
+        //    try
+        //    {
+        //        System.IO.File.WriteAllLines(filePath, diffScripts);
+        //        MessageBox.Show("SQL scriptleri baþarýyla dosyaya yazýldý:\n" + filePath);
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        MessageBox.Show("SQL scriptleri yazýlýrken hata oluþtu:\n" + ex.Message);
+        //    }
+
+        //}
+
+
+
+
+
     }
 }

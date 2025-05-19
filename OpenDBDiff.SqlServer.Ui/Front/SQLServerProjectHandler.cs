@@ -9,7 +9,7 @@ namespace OpenDBDiff.SqlServer.Ui
 {
     public class SQLServerProjectHandler : IProjectHandler
     {
-        private SqlServerConnectFront DestinationControl;
+        public SqlServerConnectFront DestinationControl;
         private SqlServerConnectFront SourceControl;
         private SQLServerGenerator SourceGenerator;
         private SQLServerGenerator DestinationGenerator;

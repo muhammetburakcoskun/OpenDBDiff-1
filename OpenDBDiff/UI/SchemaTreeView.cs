@@ -15,6 +15,7 @@ namespace OpenDBDiff.UI
     {
         private ISchemaBase databaseSource;
 
+        public TreeNodeCollection Nodes => treeView1.Nodes;
         public delegate void SchemaHandler(string ObjectFullName);
 
         public event SchemaHandler OnSelectItem;
@@ -138,6 +139,7 @@ namespace OpenDBDiff.UI
                     subnode.Tag = item;
                     subnode.ImageKey = attr.Image;
                     subnode.SelectedImageKey = attr.Image;
+                   
                 }
             }
 

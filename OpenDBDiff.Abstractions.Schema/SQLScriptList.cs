@@ -1,5 +1,6 @@
 using OpenDBDiff.Abstractions.Schema.Model;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Text;
 
@@ -7,8 +8,11 @@ namespace OpenDBDiff.Abstractions.Schema
 {
     public class SQLScriptList
     {
-        private List<SQLScript> list;
-
+        private List<SQLScript> list = new List<SQLScript>();
+        public IEnumerator GetEnumerator()
+        {
+            return list.GetEnumerator();
+        }
         public void Sort()
         {
             if (list != null) list.Sort();
